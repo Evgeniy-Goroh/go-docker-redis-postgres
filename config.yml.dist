@@ -1,0 +1,27 @@
+version: ~
+
+database:
+  connection: postgres://mg_vk:mg_vk@postgres:5432/mg_vk?sslmode=disable
+
+http_server:
+  host: ~
+  listen: :3001
+
+transport_info:
+  name: VK Messenger
+  code: mg-vkmessenger
+  logo_path: /static/logo.svg     # абсолютный путь — монтируйте ./static:/static
+
+sentry_dsn: ~
+
+log_level: 5
+debug: false
+update_interval: 24
+
+config_aws:
+  access_key_id: ~
+  secret_access_key: ~
+  region: ~
+  bucket: ~
+  folder_name: ~
+  content_type: image/jpeg

@@ -1,0 +1,61 @@
+services:
+  postgres:
+    image: postgres:12.4
+    environment:
+      POSTGRES_USER: mg_vk
+      POSTGRES_PASSWORD: mg_vk
+      POSTGRES_DB: mg_vk
+    ports:
+      - "${POSTGRES_HOST_IP:-127.0.0.1}:${POSTGRES_HOST_PORT:-5434}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mg_vk -d mg_vk"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "${REDIS_HOST_IP:-127.0.0.1}:${REDIS_HOST_PORT:-6379}:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+    command: redis-server --appendonly yes --requirepass ${REDIS_PASSWORD}
+
+  mg_vk:
+    image: golang:1.27.1
+    working_dir: /mgvk
+    user: "${UID:-1000}:${GID:-1000}"
+    environment:
+      GOCACHE: /go/cache
+      GOMODCACHE: /go/pkg/mod
+      GOFLAGS: -mod=mod
+      REVISION: ${REVISION:-v0.0-docker}
+      REDIS_ADDR: redis:6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+      POSTGRES_DSN: ${POSTGRES_DSN}
+    volumes:
+      - ./:/mgvk
+      - ./static:/mgvk/static
+      - gocache:/go
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "${MG_VK_HOST_IP:-0.0.0.0}:${MG_VK_PORT:-3001}:3001"
+    command: make run_docker
+
+volumes:
+  pgdata:
+  redisdata:
+  gocache:

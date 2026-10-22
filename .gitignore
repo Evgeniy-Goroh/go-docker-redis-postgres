@@ -1,0 +1,9 @@
+config.yml
+config_test.yml
+.idea/
+/bin/*
+*.xml
+/vendor
+coverage.out
+test-report.txt
+.env

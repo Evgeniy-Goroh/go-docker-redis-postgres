@@ -16,6 +16,7 @@ import (
 	"github.com/jessevdk/go-flags"
 	_ "github.com/lib/pq"
 	"github.com/redis/go-redis/v9"
+	"github.com/segmentio/kafka-go"
 )
 
 type Options struct {
@@ -80,8 +81,36 @@ func initDB(ctx context.Context) (*sql.DB, error) {
 	return db, nil
 }
 
+// initKafka — проверяет доступность брокера Kafka.
+// Возвращает адрес брокера (для healthHandler) и ошибку, если брокер недоступен.
+func initKafka(ctx context.Context) (string, error) {
+	brokers := os.Getenv("KAFKA_BROKERS")
+	if brokers == "" {
+		brokers = "127.0.0.1:9092"
+	}
+
+	// Проверяем доступность: запрашиваем метаданные (список топиков).
+	// Если брокер недоступен — вернётся ошибка.
+	conn, err := kafka.DialContext(ctx, "tcp", brokers)
+	if err != nil {
+		return "", fmt.Errorf("kafka dial: %w", err)
+	}
+	defer conn.Close()
+
+	// Контекст на чтение метаданных
+	metaCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+
+	if _, err := conn.ReadPartitions(); err != nil {
+		return "", fmt.Errorf("kafka read partitions: %w", err)
+	}
+	_ = metaCtx
+
+	return brokers, nil
+}
+
 // healthHandler — проверяет Redis и Postgres.
-func healthHandler(rdb *redis.Client, db *sql.DB) http.HandlerFunc {
+func healthHandler(rdb *redis.Client, db *sql.DB, kafkaBrokers string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 		defer cancel()
@@ -103,10 +132,31 @@ func healthHandler(rdb *redis.Client, db *sql.DB) http.HandlerFunc {
 			status["postgres"] = "ok"
 		}
 
+		// Kafka
+		if err := checkKafka(ctx, kafkaBrokers); err != nil {
+			status["kafka"] = "unavailable"
+			code = http.StatusServiceUnavailable
+		} else {
+			status["kafka"] = "ok"
+		}
+
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(code)
 		_ = json.NewEncoder(w).Encode(status)
 	}
+}
+
+// checkKafka — лёгкая проверка доступности брокера.
+func checkKafka(ctx context.Context, brokers string) error {
+	conn, err := kafka.DialContext(ctx, "tcp", brokers)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+
+	// ReadPartitions — быстрый способ убедиться, что брокер отвечает.
+	_, err = conn.ReadPartitions()
+	return err
 }
 
 func helloHandler(w http.ResponseWriter, r *http.Request) {
@@ -114,12 +164,12 @@ func helloHandler(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write([]byte("Привет, мир!\n"))
 }
 
-func initServer(configPath string, rdb *redis.Client, db *sql.DB) {
+func initServer(configPath string, rdb *redis.Client, db *sql.DB, kafkaBrokers string) {
 	once.Do(func() {
 		_ = configPath
 
 		mux := http.NewServeMux()
-		mux.HandleFunc("/health", healthHandler(rdb, db))
+		mux.HandleFunc("/health", healthHandler(rdb, db, kafkaBrokers))
 		mux.HandleFunc("/hello", helloHandler)
 
 		addr := os.Getenv("HTTP_ADDR")
@@ -165,7 +215,12 @@ func main() {
 		}
 	}()
 
-	initServer(options.Config, rdb, db)
+	kafkaBrokers, err := initKafka(ctx)
+	if err != nil {
+		log.Fatalf("kafka: %v", err)
+	}
+
+	initServer(options.Config, rdb, db, kafkaBrokers)
 
 	errCh := make(chan error, 1)
 	go func() {
